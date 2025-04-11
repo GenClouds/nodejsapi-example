@@ -2,10 +2,10 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [ staging, main ]  # Only these two branches
-    pull_request:
-    branches: [ staging, main ]
-  workflow_dispatch:             # Manual trigger
+    branches: [staging, main]  # Fixed: Removed extra indentation
+  pull_request:
+    branches: [staging, main]  # Fixed: Separated from push trigger
+  workflow_dispatch:           # Manual trigger
 
 jobs:
   build-and-test:
@@ -40,6 +40,7 @@ jobs:
       - name: Build and push image
         id: build-image
         env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}  # Added missing variable
           ECR_REPOSITORY: ${{ github.ref_name == 'main' && secrets.PROD_ECR_REPO || secrets.STAGING_ECR_REPO }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
@@ -50,7 +51,7 @@ jobs:
   deploy:
     needs: build-and-test
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}  # GitHub Environment (for secrets)
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -61,8 +62,8 @@ jobs:
       - name: Deploy to App Runner
         uses: awslabs/amazon-app-runner-deploy@main
         with:
-          service: ${{ github.ref_name == 'main' && 'prod-app' || 'staging-app' }}  # Explicit service names
-          image: ${{ steps.build-image.outputs.image }}
+          service: ${{ github.ref_name == 'main' && secrets.PROD_APP_RUNNER_NAME || secrets.STAGING_APP_RUNNER_NAME }}  # Changed to use secrets
+          image: ${{ needs.build-and-test.outputs.image }}  # Fixed reference
           region: ${{ secrets.AWS_REGION }}
           cpu: 1
           memory: 2
