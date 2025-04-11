@@ -2,15 +2,14 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ staging, main ]  # Only these two branches
+    pull_request:
+    branches: [ staging, main ]
+  workflow_dispatch:             # Manual trigger
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    
     permissions:
       contents: read
       id-token: write
@@ -27,94 +26,44 @@ jobs:
       
       - name: Install dependencies
         run: npm ci
-      
-      # - name: Run tests
-      #   run: npm test
-      
-      # - name: Build TypeScript
-      #   run: npm run build
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ github.ref_name == 'main' && secrets.PROD_AWS_ROLE || secrets.STAGING_AWS_ROLE }}
           aws-region: ${{ secrets.AWS_REGION }}
       
-      - name: Login to Amazon ECR
+      - name: Login to ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
       
-      - name: Build, tag, and push image to Amazon ECR
+      - name: Build and push image
         id: build-image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          ECR_REPOSITORY: ${{ github.ref_name == 'main' && secrets.PROD_ECR_REPO || secrets.STAGING_ECR_REPO }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" 
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
   deploy:
     needs: build-and-test
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    
-    permissions:
-      id-token: write
-      contents: read
-
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}  # GitHub Environment (for secrets)
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Build TypeScript
-        run: npm run build
-      
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ github.ref_name == 'main' && secrets.PROD_AWS_ROLE || secrets.STAGING_AWS_ROLE }}
           aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" 
-
 
       - name: Deploy to App Runner
-        id: deploy-apprunner
-        uses: awslabs/amazon-app-runner-deploy@main        
+        uses: awslabs/amazon-app-runner-deploy@main
         with:
-          service: ${{ secrets.APP_RUNNER_SERVICE_NAME }}
-          image: ${{ steps.build-image.outputs.image }}          
-          access-role-arn: ${{ secrets.AWS_ROLE_TO_ASSUME }}     
+          service: ${{ github.ref_name == 'main' && 'prod-app' || 'staging-app' }}  # Explicit service names
+          image: ${{ steps.build-image.outputs.image }}
           region: ${{ secrets.AWS_REGION }}
-          cpu : 1
-          memory : 2
+          cpu: 1
+          memory: 2
           port: 3000
-          wait-for-service-stability: true
-
-      - name: App Runner ID
-        run: echo "App runner ID ${{ steps.deploy-apprunner.outputs.service-id }}"
-
