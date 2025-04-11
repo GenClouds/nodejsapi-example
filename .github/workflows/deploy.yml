@@ -53,6 +53,9 @@ jobs:
     needs: build-and-test
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    permissions:  # ONLY ADDITION - REQUIRED FOR OIDC
+      contents: read
+      id-token: write
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
